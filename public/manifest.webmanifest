@@ -1,0 +1,17 @@
+{
+  "name": "Spotify Pro Local Studio",
+  "short_name": "Spotify Pro",
+  "description": "Local music library with playlists, queue, themes, and saved playback.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#07120b",
+  "theme_color": "#07120b",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
