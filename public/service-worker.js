@@ -1,5 +1,12 @@
-const CACHE_NAME = 'spotiry-shell-v1';
-const SHELL_ASSETS = ['./', './index.html', './favicon.svg', './manifest.webmanifest'];
+const CACHE_NAME = 'maermok-studio-shell-v2';
+const SHELL_ASSETS = [
+  './',
+  './index.html',
+  './favicon.svg',
+  './icon-192.png',
+  './icon-512.png',
+  './manifest.webmanifest',
+];
 
 const isSameOriginGet = (request) => (
   request.method === 'GET' && new URL(request.url).origin === self.location.origin

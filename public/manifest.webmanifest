@@ -1,16 +1,33 @@
 {
-  "name": "spotiry",
-  "short_name": "spotiry",
+  "name": "Maermok Studio",
+  "short_name": "Maermok",
   "description": "Local music library with playlists, queue, themes, and saved playback.",
+  "id": "/",
   "start_url": ".",
+  "scope": ".",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
   "background_color": "#07120b",
   "theme_color": "#07120b",
+  "categories": ["music", "entertainment", "productivity"],
   "icons": [
     {
       "src": "favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

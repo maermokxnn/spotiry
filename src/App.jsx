@@ -20,6 +20,7 @@ import {
   SkipBack,
   SkipForward,
   SlidersHorizontal,
+  Smartphone,
   Trash2,
   Upload,
   X,
@@ -40,6 +41,11 @@ const AUDIO_DB_VERSION = 1;
 const AUDIO_STORE_NAME = 'audio-files';
 const LANGUAGES = ['ru', 'uk', 'en'];
 const THEMES = ['green', 'dark', 'light', 'purple'];
+const INSTALL_TEXT = {
+  installApp: 'Install Maermok Studio',
+  installedApp: 'Installed',
+  installUnavailable: 'Open the browser menu and choose Install app or Add to Home Screen.',
+};
 const DEFAULT_PLAYLISTS = [
   { id: 'chill', name: 'Chill', trackIds: [] },
   { id: 'workout', name: 'Workout', trackIds: [] },
@@ -470,6 +476,10 @@ function App() {
   const [language, setLanguage] = useState(getInitialLanguage);
   const [theme, setTheme] = useState(getInitialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(() => (
+    window.matchMedia('(display-mode: standalone)').matches || Boolean(navigator.standalone)
+  ));
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
   const resumeTrackIdRef = useRef(loadPlayerState().currentTrackId);
@@ -587,6 +597,41 @@ function App() {
   useEffect(() => {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    const standaloneQuery = window.matchMedia('(display-mode: standalone)');
+    const updateInstalledState = () => {
+      setIsAppInstalled(standaloneQuery.matches || Boolean(navigator.standalone));
+    };
+    const handleBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+      setIsAppInstalled(false);
+    };
+    const handleInstalled = () => {
+      setInstallPrompt(null);
+      setIsAppInstalled(true);
+    };
+
+    updateInstalledState();
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleInstalled);
+    if (standaloneQuery.addEventListener) {
+      standaloneQuery.addEventListener('change', updateInstalledState);
+    } else {
+      standaloneQuery.addListener(updateInstalledState);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleInstalled);
+      if (standaloneQuery.removeEventListener) {
+        standaloneQuery.removeEventListener('change', updateInstalledState);
+      } else {
+        standaloneQuery.removeListener(updateInstalledState);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1068,7 +1113,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `spotiry-library-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `maermok-studio-library-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
     setLastExportedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -1127,6 +1172,21 @@ function App() {
     e.target.value = '';
   };
 
+  const installApp = async () => {
+    if (isAppInstalled) return;
+    if (!installPrompt) {
+      window.alert(INSTALL_TEXT.installUnavailable);
+      return;
+    }
+
+    installPrompt.prompt();
+    const result = await installPrompt.userChoice;
+    if (result?.outcome === 'accepted') {
+      setIsAppInstalled(true);
+    }
+    setInstallPrompt(null);
+  };
+
   return (
     <div className={`app-shell theme-${theme} h-screen w-screen overflow-hidden text-white`}>
       <audio ref={audioRef} crossOrigin="anonymous" />
@@ -1142,7 +1202,7 @@ function App() {
             <Music size={24} />
           </div>
           <div className="brand-copy">
-            <p className="text-sm font-semibold text-white">spotiry</p>
+            <p className="text-sm font-semibold text-white">Maermok Studio</p>
             <p className="text-xs text-slate-400">{t.localStudio}</p>
           </div>
           <button
@@ -1166,6 +1226,16 @@ function App() {
               transition={{ duration: 0.22, ease: 'easeOut' }}
             >
               <div className="settings-panel-inner">
+                <button
+                  type="button"
+                  onClick={installApp}
+                  disabled={isAppInstalled}
+                  className="install-action"
+                >
+                  <Smartphone size={17} />
+                  <span>{isAppInstalled ? INSTALL_TEXT.installedApp : INSTALL_TEXT.installApp}</span>
+                </button>
+
                 <div className="settings-group">
                   <p className="panel-label">{t.language}</p>
                   <div className="language-switcher" aria-label={t.language}>
