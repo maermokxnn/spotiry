@@ -1,6 +1,6 @@
 {
-  "name": "Spotify Pro Local Studio",
-  "short_name": "Spotify Pro",
+  "name": "spotiry",
+  "short_name": "spotiry",
   "description": "Local music library with playlists, queue, themes, and saved playback.",
   "start_url": ".",
   "display": "standalone",

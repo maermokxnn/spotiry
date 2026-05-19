@@ -1068,7 +1068,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `spotify-pro-library-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `spotiry-library-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
     setLastExportedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -1142,7 +1142,7 @@ function App() {
             <Music size={24} />
           </div>
           <div className="brand-copy">
-            <p className="text-sm font-semibold text-white">Spotify Pro</p>
+            <p className="text-sm font-semibold text-white">spotiry</p>
             <p className="text-xs text-slate-400">{t.localStudio}</p>
           </div>
           <button

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'spotify-pro-shell-v2';
+const CACHE_NAME = 'spotiry-shell-v1';
 const SHELL_ASSETS = ['./', './index.html', './favicon.svg', './manifest.webmanifest'];
 
 const isSameOriginGet = (request) => (
