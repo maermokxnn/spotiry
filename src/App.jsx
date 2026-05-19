@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Activity,
   CheckCircle2,
+  Captions,
   Clock3,
   Edit3,
-  ImagePlus,
   Download,
   HardDrive,
   Heart,
@@ -36,11 +36,43 @@ const PLAYER_STORAGE_KEY = 'spotifyPlayerState';
 const LANGUAGE_STORAGE_KEY = 'spotifyLanguage';
 const PLAYLISTS_STORAGE_KEY = 'spotifyPlaylists';
 const THEME_STORAGE_KEY = 'spotifyTheme';
+const VIDEO_THEME_STORAGE_KEY = 'maermokVideoTheme';
+const CUSTOM_VIDEO_THEMES_STORAGE_KEY = 'maermokCustomVideoThemes';
+const LYRICS_MODE_STORAGE_KEY = 'maermokLyricsMode';
 const AUDIO_DB_NAME = 'spotify-pro-audio';
-const AUDIO_DB_VERSION = 1;
+const AUDIO_DB_VERSION = 2;
 const AUDIO_STORE_NAME = 'audio-files';
+const THEME_MEDIA_STORE_NAME = 'theme-media';
+const DEFAULT_COVER_IMAGE = '/icon-512.png';
 const LANGUAGES = ['ru', 'uk', 'en'];
-const THEMES = ['green', 'dark', 'light', 'purple'];
+const THEMES = ['green', 'dark', 'light', 'purple', 'glass'];
+const BUILT_IN_VIDEO_THEMES = [
+  { id: 'rain', name: 'Rain', color: '#6ee7b7', opacity: 0.34, blur: 4 },
+  { id: 'thunderstorm', name: 'Thunderstorm', color: '#93c5fd', opacity: 0.42, blur: 5 },
+  { id: 'ocean', name: 'Ocean', color: '#38bdf8', opacity: 0.36, blur: 4 },
+  { id: 'night-city', name: 'Night City', color: '#22d3ee', opacity: 0.34, blur: 6 },
+  { id: 'space', name: 'Space', color: '#a78bfa', opacity: 0.4, blur: 3 },
+  { id: 'sunset', name: 'Sunset', color: '#fb923c', opacity: 0.36, blur: 5 },
+  { id: 'neon', name: 'Neon', color: '#22c55e', opacity: 0.42, blur: 6 },
+];
+const DEFAULT_VIDEO_THEME = { activeId: 'rain', opacity: 0.34, blur: 4 };
+const DEFAULT_CUSTOM_THEME_DRAFT = {
+  name: 'My Theme',
+  color: '#22c55e',
+  opacity: 0.38,
+  blur: 6,
+  mediaFile: null,
+  mediaPreviewUrl: '',
+  mediaType: '',
+  mediaName: '',
+};
+const DEFAULT_LYRICS_MODE_SETTINGS = {
+  textSize: 56,
+  opacity: 0.42,
+  font: 'Inter',
+  animationSpeed: 0.6,
+  useVideoBackground: true,
+};
 const INSTALL_TEXT = {
   installApp: 'Install Maermok Studio',
   installedApp: 'Installed',
@@ -112,6 +144,7 @@ const UI_TEXT = {
     dark: 'Dark Neon',
     light: 'Light Minimal',
     purple: 'Purple Studio',
+    glass: 'Glass UI',
     artistFilter: 'Артист',
     genreFilter: 'Жанр',
     durationFilter: 'Длительность',
@@ -190,6 +223,7 @@ const UI_TEXT = {
     dark: 'Dark Neon',
     light: 'Light Minimal',
     purple: 'Purple Studio',
+    glass: 'Glass UI',
     artistFilter: 'Артист',
     genreFilter: 'Жанр',
     durationFilter: 'Тривалість',
@@ -268,6 +302,7 @@ const UI_TEXT = {
     dark: 'Dark Neon',
     light: 'Light Minimal',
     purple: 'Purple Studio',
+    glass: 'Glass UI',
     artistFilter: 'Artist',
     genreFilter: 'Genre',
     durationFilter: 'Duration',
@@ -317,18 +352,21 @@ const openAudioDb = () => new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains(AUDIO_STORE_NAME)) {
       db.createObjectStore(AUDIO_STORE_NAME);
     }
+    if (!db.objectStoreNames.contains(THEME_MEDIA_STORE_NAME)) {
+      db.createObjectStore(THEME_MEDIA_STORE_NAME);
+    }
   };
 
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
 });
 
-const withAudioStore = async (mode, action) => {
+const withAudioStore = async (mode, action, storeName = AUDIO_STORE_NAME) => {
   const db = await openAudioDb();
 
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(AUDIO_STORE_NAME, mode);
-    const store = transaction.objectStore(AUDIO_STORE_NAME);
+    const transaction = db.transaction(storeName, mode);
+    const store = transaction.objectStore(storeName);
     const request = action(store);
 
     request.onsuccess = () => resolve(request.result);
@@ -345,6 +383,8 @@ const saveAudioBlob = (id, blob) => withAudioStore('readwrite', store => store.p
 const readAudioBlob = (id) => withAudioStore('readonly', store => store.get(id));
 const deleteAudioBlob = (id) => withAudioStore('readwrite', store => store.delete(id));
 const clearAudioBlobs = () => withAudioStore('readwrite', store => store.clear());
+const saveThemeMediaBlob = (id, blob) => withAudioStore('readwrite', store => store.put(blob, id), THEME_MEDIA_STORE_NAME);
+const readThemeMediaBlob = (id) => withAudioStore('readonly', store => store.get(id), THEME_MEDIA_STORE_NAME);
 
 const dataUrlToBlob = async (url) => {
   const response = await fetch(url);
@@ -374,6 +414,7 @@ const normalizeTrack = (track, index = 0) => ({
   artist: typeof track?.artist === 'string' && track.artist.trim() ? track.artist : 'Uploaded',
   genre: typeof track?.genre === 'string' ? track.genre : '',
   cover: typeof track?.cover === 'string' ? track.cover : '',
+  lyrics: typeof track?.lyrics === 'string' ? track.lyrics : '',
   addedAt: Number.isFinite(track?.addedAt) ? track.addedAt : Date.now(),
   duration: Number.isFinite(track?.duration) ? track.duration : 0,
   liked: Boolean(track?.liked),
@@ -424,6 +465,76 @@ const getInitialTheme = () => {
   return THEMES.includes(saved) ? saved : 'green';
 };
 
+const getInitialVideoTheme = () => {
+  const saved = readStoredJson(VIDEO_THEME_STORAGE_KEY, DEFAULT_VIDEO_THEME);
+  return {
+    activeId: typeof saved?.activeId === 'string' ? saved.activeId : DEFAULT_VIDEO_THEME.activeId,
+    opacity: Number.isFinite(Number(saved?.opacity)) ? Number(saved.opacity) : DEFAULT_VIDEO_THEME.opacity,
+    blur: Number.isFinite(Number(saved?.blur)) ? Number(saved.blur) : DEFAULT_VIDEO_THEME.blur,
+  };
+};
+
+const getInitialCustomVideoThemes = () => {
+  const saved = readStoredJson(CUSTOM_VIDEO_THEMES_STORAGE_KEY, []);
+  return Array.isArray(saved)
+    ? saved
+      .filter(item => item && typeof item.id === 'string')
+      .map(item => ({
+        id: item.id,
+        name: typeof item.name === 'string' && item.name.trim() ? item.name : 'Custom Theme',
+        color: typeof item.color === 'string' ? item.color : '#22c55e',
+        opacity: Number.isFinite(Number(item.opacity)) ? Number(item.opacity) : 0.38,
+        blur: Number.isFinite(Number(item.blur)) ? Number(item.blur) : 6,
+        mediaId: typeof item.mediaId === 'string' ? item.mediaId : '',
+        mediaType: item.mediaType === 'video' || item.mediaType === 'image' ? item.mediaType : '',
+        mediaName: typeof item.mediaName === 'string' ? item.mediaName : '',
+      }))
+    : [];
+};
+
+const getInitialLyricsModeSettings = () => {
+  const saved = readStoredJson(LYRICS_MODE_STORAGE_KEY, DEFAULT_LYRICS_MODE_SETTINGS);
+  return {
+    textSize: Number.isFinite(Number(saved?.textSize)) ? Number(saved.textSize) : DEFAULT_LYRICS_MODE_SETTINGS.textSize,
+    opacity: Number.isFinite(Number(saved?.opacity)) ? Number(saved.opacity) : DEFAULT_LYRICS_MODE_SETTINGS.opacity,
+    font: typeof saved?.font === 'string' ? saved.font : DEFAULT_LYRICS_MODE_SETTINGS.font,
+    animationSpeed: Number.isFinite(Number(saved?.animationSpeed)) ? Number(saved.animationSpeed) : DEFAULT_LYRICS_MODE_SETTINGS.animationSpeed,
+    useVideoBackground: typeof saved?.useVideoBackground === 'boolean'
+      ? saved.useVideoBackground
+      : DEFAULT_LYRICS_MODE_SETTINGS.useVideoBackground,
+  };
+};
+
+const parseLyrics = (track, duration) => {
+  const fallback = [
+    track?.title || 'Maermok Studio',
+    track?.artist || 'Local Studio',
+    'Your music. Your space.',
+  ];
+  const sourceLines = (track?.lyrics || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const lines = sourceLines.length > 0 ? sourceLines : fallback;
+  const timed = lines.map((line, index) => {
+    const match = line.match(/^\[(\d{1,2}):(\d{2})(?:\.(\d{1,2}))?\]\s*(.+)$/);
+    if (match) {
+      return {
+        time: Number(match[1]) * 60 + Number(match[2]) + Number(`0.${match[3] || 0}`),
+        text: match[4],
+      };
+    }
+
+    const usableDuration = duration > 0 ? duration : Math.max(lines.length * 5, 15);
+    return {
+      time: Math.min(index * (usableDuration / Math.max(lines.length, 1)), Math.max(usableDuration - 2, 0)),
+      text: line,
+    };
+  });
+
+  return timed.sort((a, b) => a.time - b.time);
+};
+
 const formatTime = (seconds) => {
   if (!seconds || Number.isNaN(seconds)) return '0:00';
   const mins = Math.floor(seconds / 60);
@@ -471,10 +582,17 @@ function App() {
   const [durationFilter, setDurationFilter] = useState('all');
   const [sortMode, setSortMode] = useState('newest');
   const [editingTrackId, setEditingTrackId] = useState(null);
-  const [editForm, setEditForm] = useState({ title: '', artist: '', genre: '', cover: '', playlistId: '' });
+  const [editForm, setEditForm] = useState({ title: '', artist: '', genre: '', cover: '', lyrics: '', playlistId: '' });
   const [lastExportedAt, setLastExportedAt] = useState(null);
   const [language, setLanguage] = useState(getInitialLanguage);
   const [theme, setTheme] = useState(getInitialTheme);
+  const [videoTheme, setVideoTheme] = useState(getInitialVideoTheme);
+  const [previewVideoThemeId, setPreviewVideoThemeId] = useState('');
+  const [customVideoThemes, setCustomVideoThemes] = useState(getInitialCustomVideoThemes);
+  const [themeMediaUrls, setThemeMediaUrls] = useState({});
+  const [customThemeDraft, setCustomThemeDraft] = useState(DEFAULT_CUSTOM_THEME_DRAFT);
+  const [isLyricsModeOpen, setIsLyricsModeOpen] = useState(false);
+  const [lyricsModeSettings, setLyricsModeSettings] = useState(getInitialLyricsModeSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isAppInstalled, setIsAppInstalled] = useState(() => (
@@ -492,6 +610,7 @@ function App() {
   const fileInputRef = useRef(null);
   const importInputRef = useRef(null);
   const coverInputRef = useRef(null);
+  const themeMediaInputRef = useRef(null);
   const objectUrlsRef = useRef(new Map());
   const initialTracksRef = useRef(tracks);
 
@@ -536,6 +655,19 @@ function App() {
   const t = UI_TEXT[language];
   const storageLabel = lastExportedAt ? `${t.exported} ${lastExportedAt}` : t.autosave;
   const editingTrack = tracks.find(track => track.id === editingTrackId);
+  const allVideoThemes = useMemo(() => [...BUILT_IN_VIDEO_THEMES, ...customVideoThemes], [customVideoThemes]);
+  const activeVideoTheme = allVideoThemes.find(item => item.id === videoTheme.activeId) || BUILT_IN_VIDEO_THEMES[0];
+  const renderedVideoTheme = allVideoThemes.find(item => item.id === previewVideoThemeId) || activeVideoTheme;
+  const renderedVideoThemeUrl = renderedVideoTheme?.mediaId ? themeMediaUrls[renderedVideoTheme.mediaId] : '';
+  const lyricLines = parseLyrics(currentTrack, duration);
+  const activeLyricIndex = lyricLines.findIndex((line, index) => {
+    const nextLine = lyricLines[index + 1];
+    return currentTime >= line.time && (!nextLine || currentTime < nextLine.time);
+  });
+  const activeLyric = activeLyricIndex >= 0 ? lyricLines[activeLyricIndex] : null;
+  const immersiveThemeUrl = activeVideoTheme?.mediaId ? themeMediaUrls[activeVideoTheme.mediaId] : '';
+  const immersiveParallaxX = Math.sin(currentTime / 6) * 10;
+  const immersiveParallaxY = Math.cos(currentTime / 8) * 8;
 
   const selectTrack = useCallback((index, options = {}) => {
     if (!tracks[index]) return;
@@ -597,6 +729,51 @@ function App() {
   useEffect(() => {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(VIDEO_THEME_STORAGE_KEY, JSON.stringify(videoTheme));
+  }, [videoTheme]);
+
+  useEffect(() => {
+    localStorage.setItem(CUSTOM_VIDEO_THEMES_STORAGE_KEY, JSON.stringify(customVideoThemes));
+  }, [customVideoThemes]);
+
+  useEffect(() => {
+    localStorage.setItem(LYRICS_MODE_STORAGE_KEY, JSON.stringify(lyricsModeSettings));
+  }, [lyricsModeSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const createdUrls = [];
+
+    const hydrateThemeMedia = async () => {
+      const entries = await Promise.all(customVideoThemes
+        .filter(item => item.mediaId)
+        .map(async (item) => {
+          try {
+            const blob = await readThemeMediaBlob(item.mediaId);
+            if (!blob) return null;
+            const url = URL.createObjectURL(blob);
+            createdUrls.push(url);
+            return [item.mediaId, url];
+          } catch (err) {
+            console.warn('Unable to restore theme media:', err);
+            return null;
+          }
+        }));
+
+      if (!cancelled) {
+        setThemeMediaUrls(Object.fromEntries(entries.filter(Boolean)));
+      }
+    };
+
+    hydrateThemeMedia();
+
+    return () => {
+      cancelled = true;
+      createdUrls.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [customVideoThemes]);
 
   useEffect(() => {
     const standaloneQuery = window.matchMedia('(display-mode: standalone)');
@@ -897,6 +1074,7 @@ function App() {
       artist: track.artist,
       genre: track.genre || '',
       cover: track.cover || '',
+      lyrics: track.lyrics || '',
       playlistId: playlists.find(playlist => playlist.trackIds.includes(track.id))?.id || '',
     });
   };
@@ -924,6 +1102,7 @@ function App() {
           artist: editForm.artist.trim() || track.artist,
           genre: editForm.genre.trim(),
           cover: editForm.cover,
+          lyrics: editForm.lyrics,
         }
         : track
     )));
@@ -936,6 +1115,57 @@ function App() {
     }));
 
     setEditingTrackId(null);
+  };
+
+  const applyVideoTheme = (item) => {
+    setVideoTheme({
+      activeId: item.id,
+      opacity: Number.isFinite(Number(item.opacity)) ? Number(item.opacity) : videoTheme.opacity,
+      blur: Number.isFinite(Number(item.blur)) ? Number(item.blur) : videoTheme.blur,
+    });
+    setPreviewVideoThemeId('');
+  };
+
+  const handleThemeMediaInput = (event) => {
+    const file = event.target.files?.[0];
+    if (!file || (!file.type.startsWith('video/') && !file.type.startsWith('image/'))) return;
+
+    if (customThemeDraft.mediaPreviewUrl) URL.revokeObjectURL(customThemeDraft.mediaPreviewUrl);
+    const previewUrl = URL.createObjectURL(file);
+    setCustomThemeDraft(prev => ({
+      ...prev,
+      mediaFile: file,
+      mediaPreviewUrl: previewUrl,
+      mediaType: file.type.startsWith('video/') ? 'video' : 'image',
+      mediaName: file.name,
+    }));
+    event.target.value = '';
+  };
+
+  const saveCustomVideoTheme = async () => {
+    const id = `custom-${crypto.randomUUID()}`;
+    let mediaId = '';
+
+    if (customThemeDraft.mediaFile) {
+      mediaId = `theme-media-${crypto.randomUUID()}`;
+      await saveThemeMediaBlob(mediaId, customThemeDraft.mediaFile);
+      setThemeMediaUrls(prev => ({ ...prev, [mediaId]: customThemeDraft.mediaPreviewUrl }));
+    }
+
+    const nextTheme = {
+      id,
+      name: customThemeDraft.name.trim() || 'Custom Theme',
+      color: customThemeDraft.color,
+      opacity: Number(customThemeDraft.opacity),
+      blur: Number(customThemeDraft.blur),
+      mediaId,
+      mediaType: customThemeDraft.mediaType,
+      mediaName: customThemeDraft.mediaName,
+    };
+
+    setCustomVideoThemes(prev => [...prev, nextTheme].slice(-8));
+    setVideoTheme({ activeId: id, opacity: nextTheme.opacity, blur: nextTheme.blur });
+    setCustomThemeDraft({ ...DEFAULT_CUSTOM_THEME_DRAFT, color: customThemeDraft.color });
   };
 
   const addPlaylist = () => {
@@ -1049,6 +1279,7 @@ function App() {
           artist: t.localLibrary,
           genre: '',
           cover: '',
+          lyrics: '',
           addedAt: Date.now(),
           duration: 0,
           liked: false,
@@ -1108,6 +1339,9 @@ function App() {
         historyIds,
       },
       theme,
+      videoTheme,
+      customVideoThemes,
+      lyricsModeSettings,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1162,6 +1396,21 @@ function App() {
         setQueueIds(Array.isArray(parsed?.player?.queueIds) ? parsed.player.queueIds : []);
         setHistoryIds(Array.isArray(parsed?.player?.historyIds) ? parsed.player.historyIds : []);
         if (THEMES.includes(parsed?.theme)) setTheme(parsed.theme);
+        if (parsed?.videoTheme) setVideoTheme({
+          activeId: typeof parsed.videoTheme.activeId === 'string' ? parsed.videoTheme.activeId : DEFAULT_VIDEO_THEME.activeId,
+          opacity: Number.isFinite(Number(parsed.videoTheme.opacity)) ? Number(parsed.videoTheme.opacity) : DEFAULT_VIDEO_THEME.opacity,
+          blur: Number.isFinite(Number(parsed.videoTheme.blur)) ? Number(parsed.videoTheme.blur) : DEFAULT_VIDEO_THEME.blur,
+        });
+        if (Array.isArray(parsed?.customVideoThemes)) setCustomVideoThemes(parsed.customVideoThemes);
+        if (parsed?.lyricsModeSettings) setLyricsModeSettings({
+          textSize: Number.isFinite(Number(parsed.lyricsModeSettings.textSize)) ? Number(parsed.lyricsModeSettings.textSize) : DEFAULT_LYRICS_MODE_SETTINGS.textSize,
+          opacity: Number.isFinite(Number(parsed.lyricsModeSettings.opacity)) ? Number(parsed.lyricsModeSettings.opacity) : DEFAULT_LYRICS_MODE_SETTINGS.opacity,
+          font: typeof parsed.lyricsModeSettings.font === 'string' ? parsed.lyricsModeSettings.font : DEFAULT_LYRICS_MODE_SETTINGS.font,
+          animationSpeed: Number.isFinite(Number(parsed.lyricsModeSettings.animationSpeed)) ? Number(parsed.lyricsModeSettings.animationSpeed) : DEFAULT_LYRICS_MODE_SETTINGS.animationSpeed,
+          useVideoBackground: typeof parsed.lyricsModeSettings.useVideoBackground === 'boolean'
+            ? parsed.lyricsModeSettings.useVideoBackground
+            : DEFAULT_LYRICS_MODE_SETTINGS.useVideoBackground,
+        });
         setIsPlaying(false);
         setDuration(0);
       } catch (err) {
@@ -1188,7 +1437,159 @@ function App() {
   };
 
   return (
-    <div className={`app-shell theme-${theme} h-screen w-screen overflow-hidden text-white`}>
+    <div
+      className={`app-shell theme-${theme} h-screen w-screen overflow-hidden text-white`}
+      style={{
+        '--video-opacity': previewVideoThemeId ? renderedVideoTheme.opacity : videoTheme.opacity,
+        '--video-blur': `${previewVideoThemeId ? renderedVideoTheme.blur : videoTheme.blur}px`,
+        '--theme-accent': renderedVideoTheme?.color || '#22c55e',
+      }}
+    >
+      <div className="video-backdrop" aria-hidden="true">
+        {renderedVideoThemeUrl && renderedVideoTheme?.mediaType === 'video' ? (
+          <video key={renderedVideoThemeUrl} src={renderedVideoThemeUrl} autoPlay muted loop playsInline />
+        ) : renderedVideoThemeUrl ? (
+          <img src={renderedVideoThemeUrl} alt="" />
+        ) : (
+          <div className={`video-theme-scene video-theme-${renderedVideoTheme?.id || 'rain'}`}>
+            {Array.from({ length: 18 }).map((_, index) => <span key={index} style={{ '--i': index }} />)}
+          </div>
+        )}
+      </div>
+      <AnimatePresence mode="wait">
+        {isPlaying && activeLyric && (
+          <motion.div
+            key={`${currentTrack?.id}-${activeLyricIndex}`}
+            className="lyrics-overlay"
+            initial={{ opacity: 0, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.55, ease: 'easeOut' }}
+          >
+            {activeLyric.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isLyricsModeOpen && isPlaying && (
+          <motion.div
+            className="immersive-lyrics"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.35 }}
+            style={{
+              '--lyrics-size': `${lyricsModeSettings.textSize}px`,
+              '--lyrics-muted-opacity': lyricsModeSettings.opacity,
+              '--lyrics-font': lyricsModeSettings.font,
+              '--lyrics-speed': `${lyricsModeSettings.animationSpeed}s`,
+              '--parallax-x': `${immersiveParallaxX}px`,
+              '--parallax-y': `${immersiveParallaxY}px`,
+            }}
+          >
+            <div className="immersive-bg" aria-hidden="true">
+              {lyricsModeSettings.useVideoBackground ? (
+                immersiveThemeUrl && activeVideoTheme?.mediaType === 'video' ? (
+                  <video key={immersiveThemeUrl} src={immersiveThemeUrl} autoPlay muted loop playsInline />
+                ) : immersiveThemeUrl ? (
+                  <img src={immersiveThemeUrl} alt="" />
+                ) : (
+                  <div className={`video-theme-scene video-theme-${activeVideoTheme?.id || 'rain'}`}>
+                    {Array.from({ length: 24 }).map((_, index) => <span key={index} style={{ '--i': index }} />)}
+                  </div>
+                )
+              ) : (
+                <img src={currentTrack?.cover || DEFAULT_COVER_IMAGE} alt="" />
+              )}
+            </div>
+            <div className="immersive-vignette" aria-hidden="true" />
+            <div className="immersive-topbar">
+              <div>
+                <p>{currentTrack?.title || 'Lyrics'}</p>
+                <span>{currentTrack?.artist || 'Maermok Studio'}</span>
+              </div>
+              <button type="button" className="immersive-close" onClick={() => setIsLyricsModeOpen(false)} aria-label="Close lyrics">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="immersive-lines" aria-live="polite">
+              {lyricLines.map((line, index) => {
+                const offset = index - Math.max(activeLyricIndex, 0);
+                const isActive = index === activeLyricIndex;
+                return (
+                  <motion.p
+                    key={`${line.time}-${line.text}`}
+                    className={isActive ? 'lyric-line lyric-line-active' : 'lyric-line'}
+                    animate={{
+                      y: offset * Math.max(lyricsModeSettings.textSize * 1.22, 62),
+                      opacity: Math.abs(offset) > 3 ? 0 : isActive ? 1 : lyricsModeSettings.opacity,
+                      scale: isActive ? 1 : 0.92,
+                      rotateX: offset * -2,
+                      z: isActive ? 40 : 0,
+                    }}
+                    transition={{ duration: lyricsModeSettings.animationSpeed, ease: 'easeOut' }}
+                  >
+                    {line.text}
+                  </motion.p>
+                );
+              })}
+            </div>
+            <div className="immersive-settings">
+              <label>
+                <span>Size</span>
+                <input
+                  type="range"
+                  min="34"
+                  max="92"
+                  value={lyricsModeSettings.textSize}
+                  onChange={(event) => setLyricsModeSettings(prev => ({ ...prev, textSize: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                <span>Opacity</span>
+                <input
+                  type="range"
+                  min="0.12"
+                  max="0.8"
+                  step="0.01"
+                  value={lyricsModeSettings.opacity}
+                  onChange={(event) => setLyricsModeSettings(prev => ({ ...prev, opacity: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                <span>Font</span>
+                <select
+                  value={lyricsModeSettings.font}
+                  onChange={(event) => setLyricsModeSettings(prev => ({ ...prev, font: event.target.value }))}
+                >
+                  <option value="Inter">Inter</option>
+                  <option value="Arial">Arial</option>
+                  <option value="Georgia">Georgia</option>
+                  <option value="Trebuchet MS">Trebuchet</option>
+                </select>
+              </label>
+              <label>
+                <span>Speed</span>
+                <input
+                  type="range"
+                  min="0.25"
+                  max="1.4"
+                  step="0.05"
+                  value={lyricsModeSettings.animationSpeed}
+                  onChange={(event) => setLyricsModeSettings(prev => ({ ...prev, animationSpeed: Number(event.target.value) }))}
+                />
+              </label>
+              <button
+                type="button"
+                className={lyricsModeSettings.useVideoBackground ? 'immersive-toggle immersive-toggle-active' : 'immersive-toggle'}
+                onClick={() => setLyricsModeSettings(prev => ({ ...prev, useVideoBackground: !prev.useVideoBackground }))}
+              >
+                {lyricsModeSettings.useVideoBackground ? 'Video theme' : 'Blur cover'}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <audio ref={audioRef} crossOrigin="anonymous" />
       <div className="ambient-lines" aria-hidden="true">
         <span />
@@ -1199,7 +1600,7 @@ function App() {
       <aside className="sidebar-shell">
         <div className="brand-lockup">
           <div className="brand-mark">
-            <Music size={24} />
+            <img src={DEFAULT_COVER_IMAGE} alt="" />
           </div>
           <div className="brand-copy">
             <p className="text-sm font-semibold text-white">Maermok Studio</p>
@@ -1266,6 +1667,117 @@ function App() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="settings-group">
+                  <p className="panel-label">Video Themes</p>
+                  <div className="video-theme-grid">
+                    {allVideoThemes.map((item) => {
+                      const mediaUrl = item.mediaId ? themeMediaUrls[item.mediaId] : '';
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`video-theme-card ${videoTheme.activeId === item.id ? 'video-theme-active' : ''}`}
+                          onClick={() => applyVideoTheme(item)}
+                          onMouseEnter={() => setPreviewVideoThemeId(item.id)}
+                          onMouseLeave={() => setPreviewVideoThemeId('')}
+                          onFocus={() => setPreviewVideoThemeId(item.id)}
+                          onBlur={() => setPreviewVideoThemeId('')}
+                        >
+                          <span className="theme-preview">
+                            {mediaUrl && item.mediaType === 'video' ? (
+                              <video src={mediaUrl} autoPlay muted loop playsInline />
+                            ) : mediaUrl ? (
+                              <img src={mediaUrl} alt="" />
+                            ) : (
+                              <span className={`video-theme-scene video-theme-${item.id}`}>
+                                {Array.from({ length: 8 }).map((_, index) => <i key={index} style={{ '--i': index }} />)}
+                              </span>
+                            )}
+                          </span>
+                          <strong>{item.name}</strong>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <label className="range-control">
+                    <span>Opacity</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="0.85"
+                      step="0.01"
+                      value={videoTheme.opacity}
+                      onChange={(event) => setVideoTheme(prev => ({ ...prev, opacity: Number(event.target.value) }))}
+                    />
+                  </label>
+                  <label className="range-control">
+                    <span>Blur</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="18"
+                      step="1"
+                      value={videoTheme.blur}
+                      onChange={(event) => setVideoTheme(prev => ({ ...prev, blur: Number(event.target.value) }))}
+                    />
+                  </label>
+                </div>
+
+                <div className="settings-group custom-theme-builder">
+                  <p className="panel-label">Custom Theme Builder</p>
+                  <label>
+                    <span>Name</span>
+                    <input
+                      value={customThemeDraft.name}
+                      onChange={(event) => setCustomThemeDraft(prev => ({ ...prev, name: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    <span>Color</span>
+                    <input
+                      type="color"
+                      value={customThemeDraft.color}
+                      onChange={(event) => setCustomThemeDraft(prev => ({ ...prev, color: event.target.value }))}
+                    />
+                  </label>
+                  <label className="range-control">
+                    <span>Opacity</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="0.85"
+                      step="0.01"
+                      value={customThemeDraft.opacity}
+                      onChange={(event) => setCustomThemeDraft(prev => ({ ...prev, opacity: Number(event.target.value) }))}
+                    />
+                  </label>
+                  <label className="range-control">
+                    <span>Blur</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="18"
+                      step="1"
+                      value={customThemeDraft.blur}
+                      onChange={(event) => setCustomThemeDraft(prev => ({ ...prev, blur: Number(event.target.value) }))}
+                    />
+                  </label>
+                  <button type="button" className="secondary-action" onClick={() => themeMediaInputRef.current?.click()}>
+                    <Upload size={16} />
+                    <span>{customThemeDraft.mediaName || 'Upload image/video'}</span>
+                  </button>
+                  <button type="button" className="primary-action" onClick={saveCustomVideoTheme}>
+                    <span>Save theme</span>
+                  </button>
+                  <input
+                    ref={themeMediaInputRef}
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={handleThemeMediaInput}
+                    className="hidden"
+                  />
                 </div>
 
                 <div className="settings-actions">
@@ -1411,19 +1923,10 @@ function App() {
               className="cover-plate"
               style={{
                 '--cover-hue': getTrackHue(currentTrack?.id || currentTrack?.title || 'spotify'),
-                backgroundImage: currentTrack?.cover ? `url(${currentTrack.cover})` : undefined,
+                backgroundImage: `url(${currentTrack?.cover || DEFAULT_COVER_IMAGE})`,
               }}
             >
               <div className="cover-scanline" aria-hidden="true" />
-              {!currentTrack?.cover && (
-                <motion.div
-                  animate={{ rotate: isPlaying ? 360 : 0 }}
-                  transition={{ duration: 9, repeat: isPlaying ? Infinity : 0, ease: 'linear' }}
-                  className="cover-disc"
-                >
-                  <Music size={56} />
-                </motion.div>
-              )}
             </div>
             <canvas ref={canvasRef} className="audio-visualizer" aria-hidden="true" />
           </div>
@@ -1560,10 +2063,10 @@ function App() {
                           className="track-cover"
                           style={{
                             '--cover-hue': getTrackHue(track.id),
-                            backgroundImage: track.cover ? `url(${track.cover})` : undefined,
+                            backgroundImage: `url(${track.cover || DEFAULT_COVER_IMAGE})`,
                           }}
                         >
-                          {isCurrent && isPlaying ? <Waves size={18} /> : !track.cover && <span>{originalIndex + 1}</span>}
+                          {isCurrent && isPlaying && <Waves size={18} />}
                         </div>
                         <div className="track-copy">
                           <p>{track.title}</p>
@@ -1628,10 +2131,9 @@ function App() {
             className="mini-cover"
             style={{
               '--cover-hue': getTrackHue(currentTrack?.id || 'mini'),
-              backgroundImage: currentTrack?.cover ? `url(${currentTrack.cover})` : undefined,
+              backgroundImage: `url(${currentTrack?.cover || DEFAULT_COVER_IMAGE})`,
             }}
           >
-            {!currentTrack?.cover && <Music size={20} />}
             <span className={`mini-eq ${isPlaying ? 'is-playing' : ''}`} aria-hidden="true">
               <i />
               <i />
@@ -1674,6 +2176,16 @@ function App() {
             >
               <Repeat size={19} />
               {repeatMode === 2 && <span>1</span>}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsLyricsModeOpen(true)}
+              disabled={!isPlaying || !currentTrack}
+              className="lyrics-mode-button"
+              aria-label="Open fullscreen lyrics"
+            >
+              <Captions size={18} />
+              <span>Lyrics</span>
             </button>
           </div>
           <div className="progress-wrap">
@@ -1739,10 +2251,9 @@ function App() {
                   onClick={() => coverInputRef.current?.click()}
                   style={{
                     '--cover-hue': getTrackHue(editingTrack.id),
-                    backgroundImage: editForm.cover ? `url(${editForm.cover})` : undefined,
+                    backgroundImage: `url(${editForm.cover || DEFAULT_COVER_IMAGE})`,
                   }}
                 >
-                  {!editForm.cover && <ImagePlus size={34} />}
                   <span>{t.chooseCover}</span>
                 </button>
                 <input
@@ -1765,6 +2276,14 @@ function App() {
                   <label>
                     <span>{t.genre}</span>
                     <input value={editForm.genre} onChange={(e) => setEditForm(prev => ({ ...prev, genre: e.target.value }))} />
+                  </label>
+                  <label>
+                    <span>Lyrics</span>
+                    <textarea
+                      value={editForm.lyrics}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, lyrics: e.target.value }))}
+                      placeholder="[0:12] First line"
+                    />
                   </label>
                   <label>
                     <span>{t.playlistName}</span>
